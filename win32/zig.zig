@@ -123,12 +123,6 @@ pub fn SUCCEEDED(hr: foundation.HRESULT) bool {
 pub const FALSE: foundation.BOOL = 0;
 pub const TRUE: foundation.BOOL = 1;
 
-pub const getWindowLongPtr = switch (unicode_mode) {
-    .ansi => getWindowLongPtrA,
-    .wide => getWindowLongPtrW,
-    .unpecified => if (builtin.is_test) struct {} else @compileError("getWindowLongPtr requires that UNICODE be set to true or false in the root module"),
-};
-
 /// calls CloseHandle, panics on failure
 pub fn closeHandle(handle: foundation.HANDLE) void {
     if (0 == foundation.CloseHandle(handle)) std.debug.panic(
@@ -137,26 +131,66 @@ pub fn closeHandle(handle: foundation.HANDLE) void {
     );
 }
 
+pub fn loword(value: anytype) u16 {
+    switch (@typeInfo(@TypeOf(value))) {
+        .Int => |int| switch (int.signedness) {
+            .signed => return loword(@as(@Type(.{ .Int = .{ .signedness = .unsigned, .bits = int.bits } }), @bitCast(value))),
+            .unsigned => return if (int.bits <= 16) value else @intCast(0xffff & value),
+        },
+        else => {},
+    }
+    @compileError("unsupported type " ++ @typeName(@TypeOf(value)));
+}
+pub fn hiword(value: anytype) u16 {
+    switch (@typeInfo(@TypeOf(value))) {
+        .Int => |int| switch (int.signedness) {
+            .signed => return hiword(@as(@Type(.{ .Int = .{ .signedness = .unsigned, .bits = int.bits } }), @bitCast(value))),
+            .unsigned => return @intCast(0xffff & (value >> 16)),
+        },
+        else => {},
+    }
+    @compileError("unsupported type " ++ @typeName(@TypeOf(value)));
+}
+
+pub const has_window_longptr = switch (arch) {
+    .X86 => false,
+    .X64, .Arm64 => true,
+};
+
+pub const getWindowLongPtr = switch (unicode_mode) {
+    .ansi => getWindowLongPtrA,
+    .wide => getWindowLongPtrW,
+    .unpecified => if (builtin.is_test) struct {} else @compileError(
+        "getWindowLongPtr requires that UNICODE be set to true or false in the root module",
+    ),
+};
+
 pub const setWindowLongPtr = switch (unicode_mode) {
     .ansi => setWindowLongPtrA,
     .wide => setWindowLongPtrW,
-    .unpecified => if (builtin.is_test) struct {} else @compileError("setWindowLongPtr requires that UNICODE be set to true or false in the root module"),
+    .unpecified => if (builtin.is_test) struct {} else @compileError(
+        "setWindowLongPtr requires that UNICODE be set to true or false in the root module",
+    ),
 };
 
 pub fn getWindowLongPtrA(hwnd: HWND, index: i32) usize {
+    if (!has_window_longptr) @compileError("this arch does not have GetWindowLongPtr");
     return @bitCast(win32.ui.windows_and_messaging.GetWindowLongPtrA(hwnd, @enumFromInt(index)));
 }
 pub fn getWindowLongPtrW(hwnd: HWND, index: i32) usize {
+    if (!has_window_longptr) @compileError("this arch does not have GetWindowLongPtr");
     return @bitCast(win32.ui.windows_and_messaging.GetWindowLongPtrW(hwnd, @enumFromInt(index)));
 }
 pub fn setWindowLongPtrA(hwnd: HWND, index: i32, value: usize) usize {
+    if (!has_window_longptr) @compileError("this arch does not have SetWindowLongPtr");
     return @bitCast(win32.ui.windows_and_messaging.SetWindowLongPtrA(hwnd, @enumFromInt(index), @bitCast(value)));
 }
 pub fn setWindowLongPtrW(hwnd: HWND, index: i32, value: usize) usize {
+    if (!has_window_longptr) @compileError("this arch does not have SetWindowLongPtr");
     return @bitCast(win32.ui.windows_and_messaging.SetWindowLongPtrW(hwnd, @enumFromInt(index), @bitCast(value)));
 }
 
-pub fn scaleDpi(comptime T: type, value: anytype, dpi: u32) T {
+pub fn scaleDpi(comptime T: type, value: T, dpi: u32) T {
     std.debug.assert(dpi >= 96);
     switch (@typeInfo(T)) {
         .Float => return value * (@as(T, @floatFromInt(dpi)) / @as(T, 96.0)),
@@ -207,7 +241,7 @@ pub fn typedConst2(comptime ReturnType: type, comptime SwitchType: type, comptim
             return value;
         },
         .pointer => |target_type_info| switch (target_type_info.size) {
-            .One, .Many, .C => {
+            .one, .many, .c => {
                 switch (@typeInfo(@TypeOf(value))) {
                     .comptime_int, .int => {
                         const usize_value = if (value >= 0) value else @as(usize, @bitCast(@as(isize, value)));
